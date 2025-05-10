@@ -7,6 +7,7 @@ def simulate_temperature_paths(det_model_result, ar_model_result, start_date, en
                               n_paths=1000, base_temp=18.0):
     """
     Simulate temperature paths using Monte Carlo with Euler discretization.
+    Uses a simplified approach without ordinal dates.
     
     Parameters:
     -----------
@@ -21,7 +22,7 @@ def simulate_temperature_paths(det_model_result, ar_model_result, start_date, en
     n_paths : int, optional
         Number of paths to simulate
     base_temp : float, optional
-        Base temperature for degree day calculations (°C)
+        Base temperature for HDD calculations (°C)
         
     Returns:
     --------
@@ -38,26 +39,37 @@ def simulate_temperature_paths(det_model_result, ar_model_result, start_date, en
     dates = pd.date_range(start=start_date, end=end_date, freq='D')
     n_days = len(dates)
     
-    # Reference date for ordinal calculation (same as in det_model_result)
-    first_ord = det_model_result['xdata'][0] - (det_model_result['xdata'][1] - det_model_result['xdata'][0])
+    print(f"Simulation period: {start_date} to {end_date} ({n_days} days)")
     
-    # Calculate ordinal days for simulation period
-    xdata = np.array([date.toordinal() - first_ord for date in dates])
+    # SIMPLIFIED APPROACH: Just use day of year for seasonal component
+    # For the linear trend, we'll use simple sequential day numbers
+    
+    # Create days since start (for linear trend)
+    days_index = np.arange(n_days)
+    
+    # Create day of year values (for seasonal component) - normalized to [0, 2π]
+    day_of_year = np.array([date.dayofyear for date in dates])
+    day_of_year_radians = 2 * np.pi * day_of_year / 365.25
     
     # Calculate deterministic component
     a, b, alpha, theta = params.values()
-    det_component = a + b * xdata + alpha * np.sin(2 * np.pi / 365.25 * xdata + theta)
+    
+    print(f"Model parameters: a={a}, b={b}, alpha={alpha}, theta={theta}")
+    
+    # Deterministic component = intercept + trend + seasonal
+    det_component = a + b * days_index + alpha * np.sin(day_of_year_radians + theta)
+    
+    print(f"Deterministic component - Min: {np.min(det_component):.2f}°C, Max: {np.max(det_component):.2f}°C, Mean: {np.mean(det_component):.2f}°C")
     
     # Initialize arrays for simulations
     temp_paths = np.zeros((n_paths, n_days))
     hdd_paths = np.zeros((n_paths, n_days))
-    cdd_paths = np.zeros((n_paths, n_days))
     
     # Get last ar_order residuals from historical data to initialize
     last_residuals = det_model_result['residuals'][-ar_order:]
     
-    # Run simulations with progress bar
-    for i in tqdm(range(n_paths), desc="Simulating temperature paths"):
+    iterator = tqdm(range(n_paths), desc="Simulating temperature paths")
+    for i in iterator:
         # Start with last known residuals
         residuals = last_residuals.copy()
         
@@ -72,62 +84,57 @@ def simulate_temperature_paths(det_model_result, ar_model_result, start_date, en
             # Total temperature is deterministic + stochastic
             temp_paths[i, t] = det_component[t] + next_residual
             
-            # Calculate degree days for this temperature
-            hdd_paths[i, t] = max(base_temp - temp_paths[i, t], 0)  # Heating degree days
-            cdd_paths[i, t] = max(temp_paths[i, t] - base_temp, 0)  # Cooling degree days
+            # Calculate heating degree days for this temperature
+            hdd_paths[i, t] = max(base_temp - temp_paths[i, t], 0)
     
-    # Create a DataFrame for easy access to simulated data
+    # Calculate statistics on zero HDDs
+    zero_hdd_prop = np.mean(hdd_paths == 0)
+    print(f"Proportion of days with zero HDDs: {zero_hdd_prop:.2%}")
+    
+    # Create a Dictionary for easy access to simulated data
     results = {
         'dates': dates,
         'deterministic': det_component,
         'temp_paths': temp_paths,
         'hdd_paths': hdd_paths,
-        'cdd_paths': cdd_paths,
-        'base_temp': base_temp
+        'base_temp': base_temp,
+        'zero_hdd_proportion': zero_hdd_prop
     }
     
     return results
-
-def calculate_cumulative_degree_days(simulation_results, degree_day_type='hdd'):
+def calculate_cumulative_degree_days(simulation_results):
     """
-    Calculate cumulative degree days from simulation results.
+    Calculate cumulative heating degree days from simulation results.
     
     Parameters:
     -----------
     simulation_results : dict
         Results from simulate_temperature_paths
-    degree_day_type : str, optional
-        Type of degree days to calculate ('hdd' or 'cdd')
         
     Returns:
     --------
     numpy.ndarray
-        Array of cumulative degree days for each path
+        Array of cumulative heating degree days for each path
     """
-    if degree_day_type.lower() == 'hdd':
-        daily_dd = simulation_results['hdd_paths']
-    elif degree_day_type.lower() == 'cdd':
-        daily_dd = simulation_results['cdd_paths']
-    else:
-        raise ValueError("degree_day_type must be 'hdd' or 'cdd'")
+    daily_hdd = simulation_results['hdd_paths']
     
     # Calculate cumulative sum for each path
-    cumulative_dd = np.sum(daily_dd, axis=1)
+    cumulative_hdd = np.sum(daily_hdd, axis=1)
     
-    return cumulative_dd
+    return cumulative_hdd
 
-def call_option_payoff(cumulative_dd, strike, alpha=1.0, cap=float('inf')):
+def call_option_payoff(cumulative_hdd, strike, tick_size=1.0, cap=float('inf')):
     """
-    Calculate call option payoff.
+    Calculate call option payoff for HDD contract.
     
     Parameters:
     -----------
-    cumulative_dd : array-like
-        Cumulative degree days
+    cumulative_hdd : array-like
+        Cumulative heating degree days
     strike : float
-        Strike price
-    alpha : float, optional
-        Multiplier
+        Strike price (K)
+    tick_size : float, optional
+        Notional value per degree day (N)
     cap : float, optional
         Maximum payoff
         
@@ -136,20 +143,20 @@ def call_option_payoff(cumulative_dd, strike, alpha=1.0, cap=float('inf')):
     array-like
         Option payoffs
     """
-    return np.minimum(alpha * np.maximum(cumulative_dd - strike, 0), cap)
+    return np.minimum(tick_size * np.maximum(cumulative_hdd - strike, 0), cap)
 
-def put_option_payoff(cumulative_dd, strike, alpha=1.0, floor=float('inf')):
+def put_option_payoff(cumulative_hdd, strike, tick_size=1.0, floor=float('inf')):
     """
-    Calculate put option payoff.
+    Calculate put option payoff for HDD contract.
     
     Parameters:
     -----------
-    cumulative_dd : array-like
-        Cumulative degree days
+    cumulative_hdd : array-like
+        Cumulative heating degree days
     strike : float
-        Strike price
-    alpha : float, optional
-        Multiplier
+        Strike price (K)
+    tick_size : float, optional
+        Notional value per degree day (N)
     floor : float, optional
         Maximum payoff
         
@@ -158,24 +165,25 @@ def put_option_payoff(cumulative_dd, strike, alpha=1.0, floor=float('inf')):
     array-like
         Option payoffs
     """
-    return np.minimum(alpha * np.maximum(strike - cumulative_dd, 0), floor)
+    return np.minimum(tick_size * np.maximum(strike - cumulative_hdd, 0), floor)
 
-def collar_option_payoff(cumulative_dd, strike1, strike2, alpha=1.0, beta=1.0, cap=float('inf'), floor=float('inf')):
+def collar_option_payoff(cumulative_hdd, call_strike, put_strike, 
+                          call_tick=1.0, put_tick=1.0, cap=float('inf'), floor=float('inf')):
     """
-    Calculate collar option payoff.
+    Calculate collar option payoff for HDD contract.
     
     Parameters:
     -----------
-    cumulative_dd : array-like
-        Cumulative degree days
-    strike1 : float
-        Strike price for call component
-    strike2 : float
-        Strike price for put component
-    alpha : float, optional
-        Multiplier for call component
-    beta : float, optional
-        Multiplier for put component
+    cumulative_hdd : array-like
+        Cumulative heating degree days
+    call_strike : float
+        Strike price for call component (K1)
+    put_strike : float
+        Strike price for put component (K2)
+    call_tick : float, optional
+        Notional value for call component (α)
+    put_tick : float, optional
+        Notional value for put component (β)
     cap : float, optional
         Maximum payoff for call component
     floor : float, optional
@@ -186,14 +194,15 @@ def collar_option_payoff(cumulative_dd, strike1, strike2, alpha=1.0, beta=1.0, c
     array-like
         Option payoffs
     """
-    call_payoff = np.minimum(alpha * np.maximum(cumulative_dd - strike1, 0), cap)
-    put_payoff = np.minimum(beta * np.maximum(strike2 - cumulative_dd, 0), floor)
+    call_payoff = np.minimum(call_tick * np.maximum(cumulative_hdd - call_strike, 0), cap)
+    put_payoff = np.minimum(put_tick * np.maximum(put_strike - cumulative_hdd, 0), floor)
     
     return call_payoff - put_payoff
 
 def price_option(payoffs, risk_free_rate, time_to_maturity):
     """
     Price an option based on Monte Carlo simulated payoffs.
+    Implements equation (26) from the problem statement.
     
     Parameters:
     -----------
@@ -213,18 +222,21 @@ def price_option(payoffs, risk_free_rate, time_to_maturity):
     discount_factor = np.exp(-risk_free_rate * time_to_maturity)
     option_price = discount_factor * np.mean(payoffs)
     
-    return option_price
+    # Calculate standard error
+    payoff_std = np.std(payoffs)
+    n_paths = len(payoffs)
+    std_error = payoff_std / np.sqrt(n_paths) * discount_factor
+    
+    return option_price, std_error
 
-def plot_degree_day_distribution(cumulative_dd, option_type, base_temp):
+def plot_degree_day_distribution(cumulative_hdd, base_temp):
     """
-    Plot distribution of cumulative degree days from simulations.
+    Plot distribution of cumulative heating degree days from simulations.
     
     Parameters:
     -----------
-    cumulative_dd : array-like
-        Cumulative degree days from simulations
-    option_type : str
-        Type of degree days ('HDD' or 'CDD')
+    cumulative_hdd : array-like
+        Cumulative heating degree days from simulations
     base_temp : float
         Base temperature used for degree day calculation
         
@@ -236,35 +248,40 @@ def plot_degree_day_distribution(cumulative_dd, option_type, base_temp):
     plt.figure(figsize=(12, 7))
     
     # Plot histogram
-    n, bins, patches = plt.hist(cumulative_dd, bins=50, alpha=0.7, density=True)
+    n, bins, patches = plt.hist(cumulative_hdd, bins=50, alpha=0.7, density=True)
     
-    # Add kernel density estimate
-    from scipy.stats import gaussian_kde
-    kde = gaussian_kde(cumulative_dd)
-    x = np.linspace(min(cumulative_dd), max(cumulative_dd), 1000)
-    plt.plot(x, kde(x), 'r-', linewidth=2)
+    # Try to add kernel density estimate
+    try:
+        # Only add KDE if there's sufficient variation in the data
+        if np.std(cumulative_hdd) > 1e-5:
+            from scipy.stats import gaussian_kde
+            kde = gaussian_kde(cumulative_hdd)
+            x = np.linspace(min(cumulative_hdd), max(cumulative_hdd), 1000)
+            plt.plot(x, kde(x), 'r-', linewidth=2)
+    except Exception as e:
+        print(f"Warning: Could not compute KDE for degree day distribution: {e}")
     
     # Add statistics
-    mean_dd = np.mean(cumulative_dd)
-    std_dd = np.std(cumulative_dd)
+    mean_dd = np.mean(cumulative_hdd)
+    std_dd = np.std(cumulative_hdd)
     
     plt.axvline(x=mean_dd, color='black', linestyle='--', linewidth=1.5,
                 label=f'Mean: {mean_dd:.2f}')
     
     # Add text with statistics
-    stats_text = f"Mean: {mean_dd:.2f}\nStd Dev: {std_dd:.2f}\nMin: {np.min(cumulative_dd):.2f}\nMax: {np.max(cumulative_dd):.2f}"
+    stats_text = f"Mean: {mean_dd:.2f}\nStd Dev: {std_dd:.2f}\nMin: {np.min(cumulative_hdd):.2f}\nMax: {np.max(cumulative_hdd):.2f}"
     plt.annotate(stats_text, xy=(0.05, 0.95), xycoords='axes fraction',
                  bbox=dict(boxstyle="round,pad=0.5", fc="white", alpha=0.8),
                  ha='left', va='top')
     
-    plt.title(f'Distribution of Cumulative {option_type} (Base Temp: {base_temp}°C)')
-    plt.xlabel(f'Cumulative {option_type}')
+    plt.title(f'Distribution of Cumulative HDD (Base Temp: {base_temp}°C)')
+    plt.xlabel(f'Cumulative HDD')
     plt.ylabel('Probability Density')
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
 
-def plot_option_payoff_distribution(payoffs, option_type, strike, price):
+def plot_option_payoff_distribution(payoffs, option_type, strike, price, std_error):
     """
     Plot distribution of option payoffs from simulations.
     
@@ -278,6 +295,8 @@ def plot_option_payoff_distribution(payoffs, option_type, strike, price):
         Strike price(s)
     price : float
         Calculated option price
+    std_error : float
+        Standard error of the price estimate
         
     Returns:
     --------
@@ -289,12 +308,16 @@ def plot_option_payoff_distribution(payoffs, option_type, strike, price):
     # Plot histogram
     n, bins, patches = plt.hist(payoffs, bins=50, alpha=0.7, density=True)
     
-    # Add kernel density estimate where possible (if payoffs are not all zero)
-    if np.std(payoffs) > 0:
-        from scipy.stats import gaussian_kde
-        kde = gaussian_kde(payoffs)
-        x = np.linspace(min(payoffs), max(payoffs), 1000)
-        plt.plot(x, kde(x), 'r-', linewidth=2)
+    # Try to add kernel density estimate
+    try:
+        # Only add KDE if there's sufficient variation in the data
+        if np.std(payoffs) > 1e-5:
+            from scipy.stats import gaussian_kde
+            kde = gaussian_kde(payoffs)
+            x = np.linspace(min(payoffs), max(payoffs), 1000)
+            plt.plot(x, kde(x), 'r-', linewidth=2)
+    except Exception as e:
+        print(f"Warning: Could not compute KDE for payoff distribution: {e}")
     
     # Add statistics
     mean_payoff = np.mean(payoffs)
@@ -304,7 +327,10 @@ def plot_option_payoff_distribution(payoffs, option_type, strike, price):
                 label=f'Mean: {mean_payoff:.2f}')
     
     # Add text with statistics
-    stats_text = f"Mean: {mean_payoff:.2f}\nStd Dev: {std_payoff:.2f}\nMin: {np.min(payoffs):.2f}\nMax: {np.max(payoffs):.2f}\nOption Price: {price:.2f}"
+    stats_text = (f"Mean: {mean_payoff:.2f}\nStd Dev: {std_payoff:.2f}\n"
+                 f"Min: {np.min(payoffs):.2f}\nMax: {np.max(payoffs):.2f}\n"
+                 f"Option Price: {price:.2f} ± {std_error:.2f}")
+    
     plt.annotate(stats_text, xy=(0.05, 0.95), xycoords='axes fraction',
                 bbox=dict(boxstyle="round,pad=0.5", fc="white", alpha=0.8),
                 ha='left', va='top')
@@ -315,7 +341,7 @@ def plot_option_payoff_distribution(payoffs, option_type, strike, price):
     else:
         strike_info = f"Strike: {strike}"
     
-    plt.title(f'{option_type} Option Payoff Distribution\n{strike_info}')
+    plt.title(f'HDD {option_type} Option Payoff Distribution\n{strike_info}')
     plt.xlabel('Option Payoff')
     plt.ylabel('Probability Density')
     plt.grid(True, alpha=0.3)
@@ -391,16 +417,14 @@ def plot_temperature_paths(simulation_results, n_paths_to_show=10):
     plt.tight_layout()
     plt.show()
 
-def plot_cumulative_dd_paths(simulation_results, degree_day_type='hdd', n_paths_to_show=10):
+def plot_cumulative_hdd_paths(simulation_results, n_paths_to_show=10):
     """
-    Plot cumulative degree day paths.
+    Plot cumulative heating degree day paths.
     
     Parameters:
     -----------
     simulation_results : dict
         Results from simulate_temperature_paths
-    degree_day_type : str, optional
-        Type of degree days to plot ('hdd' or 'cdd')
     n_paths_to_show : int, optional
         Number of paths to display
         
@@ -413,37 +437,29 @@ def plot_cumulative_dd_paths(simulation_results, degree_day_type='hdd', n_paths_
     
     # Get data
     dates = simulation_results['dates']
-    
-    if degree_day_type.lower() == 'hdd':
-        dd_paths = simulation_results['hdd_paths']
-        title = 'Heating Degree Days (HDD)'
-    elif degree_day_type.lower() == 'cdd':
-        dd_paths = simulation_results['cdd_paths']
-        title = 'Cooling Degree Days (CDD)'
-    else:
-        raise ValueError("degree_day_type must be 'hdd' or 'cdd'")
+    hdd_paths = simulation_results['hdd_paths']
     
     # Calculate cumulative sums
-    cum_dd_paths = np.cumsum(dd_paths, axis=1)
+    cum_hdd_paths = np.cumsum(hdd_paths, axis=1)
     
     # Plot subset of paths
-    for i in range(min(n_paths_to_show, cum_dd_paths.shape[0])):
-        plt.plot(dates, cum_dd_paths[i], alpha=0.5, linewidth=0.8)
+    for i in range(min(n_paths_to_show, cum_hdd_paths.shape[0])):
+        plt.plot(dates, cum_hdd_paths[i], alpha=0.5, linewidth=0.8)
     
     # Calculate and plot mean path
-    mean_path = np.mean(cum_dd_paths, axis=0)
+    mean_path = np.mean(cum_hdd_paths, axis=0)
     plt.plot(dates, mean_path, 'r-', linewidth=2, label='Mean Path')
     
     # Calculate and plot 5% and 95% quantiles
-    q05_path = np.percentile(cum_dd_paths, 5, axis=0)
-    q95_path = np.percentile(cum_dd_paths, 95, axis=0)
+    q05_path = np.percentile(cum_hdd_paths, 5, axis=0)
+    q95_path = np.percentile(cum_hdd_paths, 95, axis=0)
     
     plt.fill_between(dates, q05_path, q95_path, alpha=0.2, color='red',
                      label='90% Confidence Interval')
     
-    plt.title(f'Cumulative {title} Paths')
+    plt.title('Cumulative Heating Degree Days (HDD) Paths')
     plt.xlabel('Date')
-    plt.ylabel(f'Cumulative {title}')
+    plt.ylabel('Cumulative HDD')
     plt.legend()
     plt.grid(True)
     plt.tight_layout()

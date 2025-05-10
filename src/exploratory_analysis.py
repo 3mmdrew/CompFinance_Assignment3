@@ -56,10 +56,6 @@ def decompose_time_series(df, column, period=365, model='additive'):
     object
         Decomposition results object with trend, seasonal, and residual attributes
     """
-    # Check for NaN values before decomposition
-    if df[column].isna().any():
-        raise ValueError("Time series contains NaN values. Please clean the data first.")
-    
     # Perform decomposition
     decompose_result = seasonal_decompose(df[column], model=model, period=period)
     
