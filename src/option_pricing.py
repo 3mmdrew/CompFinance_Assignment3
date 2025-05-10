@@ -247,19 +247,8 @@ def plot_degree_day_distribution(cumulative_hdd, base_temp):
     """
     plt.figure(figsize=(12, 7))
     
-    # Plot histogram
-    n, bins, patches = plt.hist(cumulative_hdd, bins=50, alpha=0.7, density=True)
-    
-    # Try to add kernel density estimate
-    try:
-        # Only add KDE if there's sufficient variation in the data
-        if np.std(cumulative_hdd) > 1e-5:
-            from scipy.stats import gaussian_kde
-            kde = gaussian_kde(cumulative_hdd)
-            x = np.linspace(min(cumulative_hdd), max(cumulative_hdd), 1000)
-            plt.plot(x, kde(x), 'r-', linewidth=2)
-    except Exception as e:
-        print(f"Warning: Could not compute KDE for degree day distribution: {e}")
+    # Plot histogram with frequency instead of density
+    n, bins, patches = plt.hist(cumulative_hdd, bins=50, alpha=0.7, density=False)
     
     # Add statistics
     mean_dd = np.mean(cumulative_hdd)
@@ -276,7 +265,7 @@ def plot_degree_day_distribution(cumulative_hdd, base_temp):
     
     plt.title(f'Distribution of Cumulative HDD (Base Temp: {base_temp}°C)')
     plt.xlabel(f'Cumulative HDD')
-    plt.ylabel('Probability Density')
+    plt.ylabel('Frequency')  # Changed from 'Probability Density' to 'Frequency'
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
@@ -305,19 +294,8 @@ def plot_option_payoff_distribution(payoffs, option_type, strike, price, std_err
     """
     plt.figure(figsize=(12, 7))
     
-    # Plot histogram
-    n, bins, patches = plt.hist(payoffs, bins=50, alpha=0.7, density=True)
-    
-    # Try to add kernel density estimate
-    try:
-        # Only add KDE if there's sufficient variation in the data
-        if np.std(payoffs) > 1e-5:
-            from scipy.stats import gaussian_kde
-            kde = gaussian_kde(payoffs)
-            x = np.linspace(min(payoffs), max(payoffs), 1000)
-            plt.plot(x, kde(x), 'r-', linewidth=2)
-    except Exception as e:
-        print(f"Warning: Could not compute KDE for payoff distribution: {e}")
+    # Plot histogram with frequency instead of density
+    n, bins, patches = plt.hist(payoffs, bins=50, alpha=0.7, density=False)
     
     # Add statistics
     mean_payoff = np.mean(payoffs)
@@ -343,7 +321,7 @@ def plot_option_payoff_distribution(payoffs, option_type, strike, price, std_err
     
     plt.title(f'HDD {option_type} Option Payoff Distribution\n{strike_info}')
     plt.xlabel('Option Payoff')
-    plt.ylabel('Probability Density')
+    plt.ylabel('Frequency')  # Changed from 'Probability Density' to 'Frequency'
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.show()
