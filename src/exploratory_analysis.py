@@ -81,23 +81,19 @@ def plot_decomposition(decompose_result, original_series):
     seasonal = decompose_result.seasonal
     residual = decompose_result.resid
     
-    fig, axes = plt.subplots(4, 1, figsize=(14, 16))
+    fig, axes = plt.subplots(3, 1, figsize=(14, 16))
     
-    axes[0].plot(original_series.index, original_series)
-    axes[0].set_title('Original Time Series')
+    axes[0].plot(trend.index, trend)
+    axes[0].set_title('Trend Component')
     axes[0].grid(True)
     
-    axes[1].plot(trend.index, trend)
-    axes[1].set_title('Trend Component')
+    axes[1].plot(seasonal.index, seasonal)
+    axes[1].set_title('Seasonal Component')
     axes[1].grid(True)
     
-    axes[2].plot(seasonal.index, seasonal)
-    axes[2].set_title('Seasonal Component')
+    axes[2].plot(residual.index, residual)
+    axes[2].set_title('Residual Component')
     axes[2].grid(True)
-    
-    axes[3].plot(residual.index, residual)
-    axes[3].set_title('Residual Component')
-    axes[3].grid(True)
     
     plt.tight_layout()
     plt.show()

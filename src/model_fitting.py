@@ -232,8 +232,8 @@ def plot_ar_model_diagnostics(ar_model):
     plt.plot(ar_residuals.index, ar_residuals)
     plt.axhline(y=0, color='red', linestyle='--')
     plt.title('AR Model Residuals')
-    plt.xlabel('Date')
-    plt.ylabel('Residual')
+    plt.xlabel('Time Period')
+    plt.ylabel('Model Residuals (Observed - Predicted)')
     plt.grid(True)
     plt.tight_layout()
     plt.show()
@@ -243,10 +243,14 @@ def plot_ar_model_diagnostics(ar_model):
     
     sm.graphics.tsa.plot_acf(ar_residuals.dropna(), lags=40, ax=axes[0])
     axes[0].set_title('ACF of AR Model Residuals')
+    axes[0].set_xlabel('Lag (Time Periods)')
+    axes[0].set_ylabel('Autocorrelation Coefficient')
     axes[0].grid(True)
     
     sm.graphics.tsa.plot_pacf(ar_residuals.dropna(), lags=40, ax=axes[1])
     axes[1].set_title('PACF of AR Model Residuals')
+    axes[1].set_xlabel('Lag (Time Periods)')
+    axes[1].set_ylabel('Partial Autocorrelation Coefficient')
     axes[1].grid(True)
     
     plt.tight_layout()
@@ -254,8 +258,10 @@ def plot_ar_model_diagnostics(ar_model):
     
     # Q-Q plot
     plt.figure(figsize=(10, 6))
-    sm.qqplot(ar_residuals.dropna(), line='45', fit=True)
+    qqplot = sm.qqplot(ar_residuals.dropna(), line='45', fit=True)
     plt.title('Q-Q Plot of AR Model Residuals')
+    plt.xlabel('Theoretical Quantiles (Normal Distribution)')
+    plt.ylabel('Sample Quantiles (Residuals)')
     plt.grid(True)
     plt.tight_layout()
     plt.show()
@@ -271,8 +277,8 @@ def plot_ar_model_diagnostics(ar_model):
     plt.plot(x, p, 'k', linewidth=2)
     
     plt.title('Distribution of AR Model Residuals')
-    plt.xlabel('Residual')
-    plt.ylabel('Density')
+    plt.xlabel('Residual Value (Observed - Predicted)')
+    plt.ylabel('Probability Density')
     plt.grid(True)
     plt.tight_layout()
     plt.show()
